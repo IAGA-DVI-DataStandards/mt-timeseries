@@ -34,11 +34,12 @@ import xarray as xr
 # Import the module under test
 try:
     from mt_timeseries.scipy_filters import (
+        FilteringNaNWarning,
+        UnevenSamplingWarning,
         bandpass,
         bandstop,
         decimate,
         detrend,
-        FilteringNaNWarning,
         frequency_filter,
         get_maybe_only_dim,
         get_sampling_step,
@@ -46,7 +47,6 @@ try:
         lowpass,
         resample_poly,
         savgol_filter,
-        UnevenSamplingWarning,
     )
     from mt_timeseries.ts_helpers import make_dt_coordinates
 
