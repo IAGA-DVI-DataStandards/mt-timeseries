@@ -35,7 +35,7 @@ dependencies = [
     "pandas",
     "matplotlib",
     "loguru",
-    "mt_metadata>=1.0.0",
+    "mt_metadata>=1.0.13",
 ]
 
 [project.urls]

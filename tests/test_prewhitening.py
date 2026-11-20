@@ -1,8 +1,8 @@
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 import xarray as xr
+from mt_metadata.processing import ShortTimeFourierTransform
+from mt_metadata.processing.short_time_fourier_transform import PrewhiteningTypeEnum
 
 from mt_timeseries.spectre.prewhitening import (
     apply_prewhitening,
@@ -10,11 +10,28 @@ from mt_timeseries.spectre.prewhitening import (
 )
 
 
-def _config(prewhitening_type, ar_order=0, ma_order=0):
-    return SimpleNamespace(
-        prewhitening_type=prewhitening_type,
-        prewhitening_ar_order=ar_order,
-        prewhitening_ma_order=ma_order,
+@pytest.fixture
+def first_difference_config():
+    return ShortTimeFourierTransform(
+        prewhitening_type=PrewhiteningTypeEnum.first_difference,
+    )
+
+
+@pytest.fixture
+def ar_config():
+    return ShortTimeFourierTransform(
+        prewhitening_type=PrewhiteningTypeEnum.arma,
+        prewhitening_ar_order=1,
+        prewhitening_ma_order=0,
+    )
+
+
+@pytest.fixture
+def ma_config():
+    return ShortTimeFourierTransform(
+        prewhitening_type=PrewhiteningTypeEnum.arma,
+        prewhitening_ar_order=1,
+        prewhitening_ma_order=1,
     )
 
 
@@ -47,24 +64,26 @@ def _ar1_samples(coefficient, innovations):
     return samples
 
 
-def test_first_difference_uses_discrete_difference():
+def test_first_difference_uses_discrete_difference(first_difference_config):
     dataset = _time_series_dataset(hx=np.array([2.0, 5.0, 9.0, 14.0]))
 
-    whitened, results = apply_prewhitening(_config("first difference"), dataset)
+    whitened, results = apply_prewhitening(first_difference_config, dataset)
 
     np.testing.assert_array_equal(whitened.hx.data, np.array([3.0, 4.0, 5.0]))
     assert whitened.time.data[0] == np.timedelta64(1, "s")
     assert results == {}
 
 
-def test_first_difference_recoloring_uses_exact_response_and_zeroes_dc():
+def test_first_difference_recoloring_uses_exact_response_and_zeroes_dc(
+    first_difference_config,
+):
     frequencies = np.array([0.0, 0.125, 0.25, 0.375])
     original = np.array([3.0 + 1.0j, 2.0 - 4.0j, -1.0 + 2.0j, 5.0 - 3.0j])
     response = 1.0 - np.exp(-2.0j * np.pi * frequencies)
     whitened = _fourier_dataset({"hx": original * response}, frequencies)
 
     recolored = apply_recoloring(
-        _config("first difference"),
+        first_difference_config,
         whitened,
         sample_rate=1.0,
         results={},
@@ -74,13 +93,13 @@ def test_first_difference_recoloring_uses_exact_response_and_zeroes_dc():
     np.testing.assert_allclose(recolored.hx.data[0, 1:], original[1:])
 
 
-def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel():
+def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel(ar_config):
     rng = np.random.default_rng(42)
     hx = _ar1_samples(0.7, rng.normal(size=512))
     hy = _ar1_samples(-0.4, rng.normal(size=512))
     dataset = _time_series_dataset(hx=hx, hy=hy)
 
-    whitened, results = apply_prewhitening(_config("ARMA", ar_order=1), dataset)
+    whitened, results = apply_prewhitening(ar_config, dataset)
 
     assert abs(np.corrcoef(whitened.hx.data[:-1], whitened.hx.data[1:])[0, 1]) < abs(
         np.corrcoef(hx[:-1], hx[1:])[0, 1]
@@ -109,7 +128,7 @@ def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel():
     }
 
     recolored = apply_recoloring(
-        _config("ARMA", ar_order=1),
+        ar_config,
         _fourier_dataset(whitened_fourier, frequencies),
         sample_rate=1.0,
         results=results,
@@ -122,20 +141,20 @@ def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel():
         )
 
 
-def test_ar_prewhitening_rejects_non_finite_samples():
+def test_ar_prewhitening_rejects_non_finite_samples(ar_config):
     values = np.arange(16, dtype=float)
     values[3] = np.nan
 
     with pytest.raises(ValueError, match="non-finite"):
         apply_prewhitening(
-            _config("ARMA", ar_order=1),
+            ar_config,
             _time_series_dataset(hx=values),
         )
 
 
-def test_ar_prewhitening_rejects_nonzero_ma_order():
+def test_ar_prewhitening_rejects_nonzero_ma_order(ma_config):
     with pytest.raises(NotImplementedError, match="prewhitening_ma_order"):
         apply_prewhitening(
-            _config("ARMA", ar_order=1, ma_order=1),
+            ma_config,
             _time_series_dataset(hx=np.arange(16, dtype=float)),
         )
