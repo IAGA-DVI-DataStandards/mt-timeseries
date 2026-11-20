@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 from mt_metadata.processing import ShortTimeFourierTransform
+from mt_metadata.processing.fourier_coefficients import FCChannel
 from mt_metadata.processing.short_time_fourier_transform import PrewhiteningTypeEnum
 
 from mt_timeseries.spectre.prewhitening import (
@@ -107,10 +108,11 @@ def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel(ar_conf
     assert abs(np.corrcoef(whitened.hy.data[:-1], whitened.hy.data[1:])[0, 1]) < abs(
         np.corrcoef(hy[:-1], hy[1:])[0, 1]
     )
-    assert results["hx"].ar_coefficients[0] == pytest.approx(0.7, abs=0.1)
-    assert results["hy"].ar_coefficients[0] == pytest.approx(-0.4, abs=0.1)
-    assert results["hx"].ma_coefficients == ()
-    assert results["hy"].ma_coefficients == ()
+    assert isinstance(results["hx"], FCChannel)
+    assert results["hx"].prewhitening_ar_coefficients[0] == pytest.approx(0.7, abs=0.1)
+    assert results["hy"].prewhitening_ar_coefficients[0] == pytest.approx(-0.4, abs=0.1)
+    assert results["hx"].prewhitening_ma_coefficients == []
+    assert results["hy"].prewhitening_ma_coefficients == []
 
     frequencies = np.array([0.1, 0.2, 0.3])
     original = {
@@ -121,7 +123,7 @@ def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel(ar_conf
         channel_id: values
         * (
             1.0
-            - results[channel_id].ar_coefficients[0]
+            - results[channel_id].prewhitening_ar_coefficients[0]
             * np.exp(-2.0j * np.pi * frequencies)
         )
         for channel_id, values in original.items()
@@ -136,9 +138,10 @@ def test_ar_prewhitening_recovers_coefficients_and_recolors_each_channel(ar_conf
 
     for channel_id, values in original.items():
         np.testing.assert_allclose(recolored[channel_id].data[0], values)
-        assert (
-            recolored[channel_id].attrs["prewhitening"] == results[channel_id].as_dict()
-        )
+        assert recolored[channel_id].attrs["prewhitening"] == {
+            "ar_coefficients": results[channel_id].prewhitening_ar_coefficients,
+            "ma_coefficients": results[channel_id].prewhitening_ma_coefficients,
+        }
 
 
 def test_ar_prewhitening_rejects_non_finite_samples(ar_config):

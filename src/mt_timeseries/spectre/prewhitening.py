@@ -2,27 +2,12 @@
 Numerical prewhitening and Fourier-domain recoloring utilities.
 """
 
-from dataclasses import dataclass
 from typing import Mapping
 
 import numpy as np
 import xarray as xr
 from loguru import logger
-
-
-@dataclass(frozen=True)
-class PrewhiteningResult:
-    """Fitted per-channel filter coefficients used to recolor Fourier data."""
-
-    ar_coefficients: tuple[float, ...] = ()
-    ma_coefficients: tuple[float, ...] = ()
-
-    def as_dict(self) -> dict[str, list[float]]:
-        """Return JSON-serializable filter coefficients."""
-        return {
-            "ar_coefficients": list(self.ar_coefficients),
-            "ma_coefficients": list(self.ma_coefficients),
-        }
+from mt_metadata.processing.fourier_coefficients import FCChannel
 
 
 def _prewhitening_type(stft_config) -> str:
@@ -48,7 +33,7 @@ def _fit_ar_residuals(
     channel_data: np.ndarray,
     ar_order: int,
     channel_id: str,
-) -> tuple[np.ndarray, PrewhiteningResult]:
+) -> tuple[np.ndarray, FCChannel]:
     """Fit a stable AR model and return its innovation sequence."""
     if channel_data.ndim != 1:
         msg = f"Channel {channel_id} must have one-dimensional time-series data"
@@ -76,17 +61,29 @@ def _fit_ar_residuals(
         msg = f"Channel {channel_id} produced an unstable AR filter"
         raise ValueError(msg)
 
-    result = PrewhiteningResult(
-        ar_coefficients=tuple(float(value) for value in fitted_model.arparams),
-        ma_coefficients=(),
+    result = FCChannel(
+        component=channel_id,
+        prewhitening_type="ARMA",
+        prewhitening_fit_domain="full run",
+        prewhitening_response_convention="A(z) = 1 - sum(phi_k z^-k)",
+        prewhitening_ar_coefficients=[float(value) for value in fitted_model.arparams],
+        prewhitening_ma_coefficients=[],
     )
     return np.asarray(fitted_model.resid), result
+
+
+def _coefficient_attrs(result: FCChannel) -> dict[str, list[float]]:
+    """Return the transient coefficient keys used by the xarray transport."""
+    return {
+        "ar_coefficients": result.prewhitening_ar_coefficients,
+        "ma_coefficients": result.prewhitening_ma_coefficients,
+    }
 
 
 def apply_prewhitening(
     stft_config,
     run_xrds_input: xr.Dataset,
-) -> tuple[xr.Dataset, dict[str, PrewhiteningResult]]:
+) -> tuple[xr.Dataset, dict[str, FCChannel]]:
     """
     Apply configured prewhitening over the full input run.
 
@@ -109,7 +106,7 @@ def apply_prewhitening(
 
     ar_order, _ = _validate_arma_configuration(stft_config)
     run_xrds = run_xrds_input.copy(deep=True)
-    results: dict[str, PrewhiteningResult] = {}
+    results: dict[str, FCChannel] = {}
     for channel_id, channel in run_xrds_input.data_vars.items():
         residuals, result = _fit_ar_residuals(
             np.asarray(channel.data),
@@ -117,7 +114,7 @@ def apply_prewhitening(
             channel_id,
         )
         run_xrds[channel_id].data = residuals
-        run_xrds[channel_id].attrs["prewhitening"] = result.as_dict()
+        run_xrds[channel_id].attrs["prewhitening"] = _coefficient_attrs(result)
         results[channel_id] = result
     return run_xrds, results
 
@@ -126,7 +123,7 @@ def _whitening_response(
     prewhitening_type: str,
     frequencies: np.ndarray,
     sample_rate: float,
-    result: PrewhiteningResult | None,
+    result: FCChannel | None,
 ) -> np.ndarray:
     """Compute the exact discrete-time whitening response."""
     z_inverse = np.exp(-2.0j * np.pi * frequencies / sample_rate)
@@ -138,11 +135,15 @@ def _whitening_response(
             msg = "ARMA recoloring requires fitted per-channel coefficients"
             raise ValueError(msg)
         ar_polynomial = np.ones_like(z_inverse, dtype=complex)
-        for order, coefficient in enumerate(result.ar_coefficients, start=1):
+        for order, coefficient in enumerate(
+            result.prewhitening_ar_coefficients, start=1
+        ):
             ar_polynomial -= coefficient * z_inverse**order
 
         ma_polynomial = np.ones_like(z_inverse, dtype=complex)
-        for order, coefficient in enumerate(result.ma_coefficients, start=1):
+        for order, coefficient in enumerate(
+            result.prewhitening_ma_coefficients, start=1
+        ):
             ma_polynomial += coefficient * z_inverse**order
         return ar_polynomial / ma_polynomial
 
@@ -154,7 +155,7 @@ def apply_recoloring(
     stft_config,
     stft_obj: xr.Dataset,
     sample_rate: float,
-    results: Mapping[str, PrewhiteningResult],
+    results: Mapping[str, FCChannel],
 ) -> xr.Dataset:
     """
     Invert configured prewhitening in the Fourier domain channel by channel.
@@ -182,5 +183,7 @@ def apply_recoloring(
         np.divide(data, response, out=recolored, where=valid)
         stft_obj[channel_id].data = recolored
         if channel_id in results:
-            stft_obj[channel_id].attrs["prewhitening"] = results[channel_id].as_dict()
+            stft_obj[channel_id].attrs["prewhitening"] = _coefficient_attrs(
+                results[channel_id]
+            )
     return stft_obj
