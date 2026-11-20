@@ -5,6 +5,7 @@ Allows access to classes that we want to import without full pathing to module.
 from typing import TYPE_CHECKING
 
 from .prewhitening import (
+    Prewhitening,
     apply_prewhitening,
     apply_recoloring,
 )
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from .spectrogram import Spectrogram
 
 __all__ = [
+    "Prewhitening",
     "Spectrogram",
     "apply_prewhitening",
     "apply_recoloring",

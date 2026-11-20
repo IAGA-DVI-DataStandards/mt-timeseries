@@ -4,8 +4,10 @@ import xarray as xr
 from mt_metadata.processing import ShortTimeFourierTransform
 from mt_metadata.processing.fourier_coefficients import FCChannel
 from mt_metadata.processing.short_time_fourier_transform import PrewhiteningTypeEnum
+from pydantic import ValidationError
 
 from mt_timeseries.spectre.prewhitening import (
+    Prewhitening,
     apply_prewhitening,
     apply_recoloring,
 )
@@ -156,8 +158,17 @@ def test_ar_prewhitening_rejects_non_finite_samples(ar_config):
 
 
 def test_ar_prewhitening_rejects_nonzero_ma_order(ma_config):
-    with pytest.raises(NotImplementedError, match="prewhitening_ma_order"):
-        apply_prewhitening(
-            ma_config,
-            _time_series_dataset(hx=np.arange(16, dtype=float)),
+    with pytest.raises(NotImplementedError, match="ma_order"):
+        Prewhitening(
+            type=PrewhiteningTypeEnum.arma,
+            ar_order=ma_config.prewhitening_ar_order,
+            ma_order=ma_config.prewhitening_ma_order,
         )
+
+
+def test_prewhitening_metadata_validates_arma_order():
+    with pytest.raises(ValueError, match="ar_order"):
+        Prewhitening(type=PrewhiteningTypeEnum.arma)
+
+    with pytest.raises(ValidationError, match="ar_order"):
+        Prewhitening(ar_order=-1)

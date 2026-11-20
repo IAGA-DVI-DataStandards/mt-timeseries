@@ -7,26 +7,37 @@ from typing import Mapping
 import numpy as np
 import xarray as xr
 from loguru import logger
+from mt_metadata.base import MetadataBase
 from mt_metadata.processing.fourier_coefficients import FCChannel
+from mt_metadata.processing.short_time_fourier_transform import PrewhiteningTypeEnum
+from pydantic import Field, model_validator
 
 
-def _prewhitening_type(stft_config) -> str:
-    """Normalize metadata enum values to their serialized strings."""
-    prewhitening_type = stft_config.prewhitening_type
-    return getattr(prewhitening_type, "value", prewhitening_type)
+class Prewhitening(MetadataBase):
+    """Temporary prewhitening metadata model pending migration to mt-metadata."""
+
+    type: PrewhiteningTypeEnum = PrewhiteningTypeEnum.first_difference
+    ar_order: int = Field(default=0, ge=0)
+    ma_order: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_arma_orders(self) -> "Prewhitening":
+        if self.type == PrewhiteningTypeEnum.arma and self.ar_order < 1:
+            msg = "ARMA prewhitening requires ar_order to be at least 1"
+            raise ValueError(msg)
+        if self.type == PrewhiteningTypeEnum.arma and self.ma_order != 0:
+            msg = "ARMA prewhitening currently supports only ma_order == 0"
+            raise NotImplementedError(msg)
+        return self
 
 
-def _validate_arma_configuration(stft_config) -> tuple[int, int]:
-    """Validate the AR-only subset of the ARMA configuration family."""
-    ar_order = stft_config.prewhitening_ar_order
-    ma_order = stft_config.prewhitening_ma_order
-    if ar_order < 1:
-        msg = "ARMA prewhitening requires prewhitening_ar_order to be at least 1"
-        raise ValueError(msg)
-    if ma_order != 0:
-        msg = "ARMA prewhitening currently supports only prewhitening_ma_order == 0"
-        raise NotImplementedError(msg)
-    return ar_order, ma_order
+def _prewhitening_metadata(stft_config) -> Prewhitening:
+    """Build the temporary model from the flat STFT metadata fields."""
+    return Prewhitening(
+        type=stft_config.prewhitening_type,
+        ar_order=stft_config.prewhitening_ar_order,
+        ma_order=stft_config.prewhitening_ma_order,
+    )
 
 
 def _fit_ar_residuals(
@@ -91,26 +102,25 @@ def apply_prewhitening(
     metadata must be passed to :func:`apply_recoloring`; filters are never fit
     from Fourier data.
     """
-    prewhitening_type = _prewhitening_type(stft_config)
-    if not prewhitening_type:
+    prewhitening = _prewhitening_metadata(stft_config)
+    if not prewhitening.type.value:
         logger.info("No prewhitening specified - skipping this step")
         return run_xrds_input, {}
 
-    if prewhitening_type == "first difference":
+    if prewhitening.type == PrewhiteningTypeEnum.first_difference:
         return run_xrds_input.diff("time", label="upper"), {}
 
-    if prewhitening_type != "ARMA":
-        msg = f"{prewhitening_type} pre-whitening not implemented"
+    if prewhitening.type != PrewhiteningTypeEnum.arma:
+        msg = f"{prewhitening.type.value} pre-whitening not implemented"
         logger.error(msg)
         raise NotImplementedError(msg)
 
-    ar_order, _ = _validate_arma_configuration(stft_config)
     run_xrds = run_xrds_input.copy(deep=True)
     results: dict[str, FCChannel] = {}
     for channel_id, channel in run_xrds_input.data_vars.items():
         residuals, result = _fit_ar_residuals(
             np.asarray(channel.data),
-            ar_order,
+            prewhitening.ar_order,
             channel_id,
         )
         run_xrds[channel_id].data = residuals
@@ -120,17 +130,17 @@ def apply_prewhitening(
 
 
 def _whitening_response(
-    prewhitening_type: str,
+    prewhitening: Prewhitening,
     frequencies: np.ndarray,
     sample_rate: float,
     result: FCChannel | None,
 ) -> np.ndarray:
     """Compute the exact discrete-time whitening response."""
     z_inverse = np.exp(-2.0j * np.pi * frequencies / sample_rate)
-    if prewhitening_type == "first difference":
+    if prewhitening.type == PrewhiteningTypeEnum.first_difference:
         return 1.0 - z_inverse
 
-    if prewhitening_type == "ARMA":
+    if prewhitening.type == PrewhiteningTypeEnum.arma:
         if result is None:
             msg = "ARMA recoloring requires fitted per-channel coefficients"
             raise ValueError(msg)
@@ -147,7 +157,7 @@ def _whitening_response(
             ma_polynomial += coefficient * z_inverse**order
         return ar_polynomial / ma_polynomial
 
-    msg = f"{prewhitening_type} recoloring not implemented"
+    msg = f"{prewhitening.type.value} recoloring not implemented"
     raise NotImplementedError(msg)
 
 
@@ -163,8 +173,8 @@ def apply_recoloring(
     Frequencies where the whitening response is zero are set to zero, including
     DC for first differences, instead of emitting infinities.
     """
-    prewhitening_type = _prewhitening_type(stft_config)
-    if not prewhitening_type:
+    prewhitening = _prewhitening_metadata(stft_config)
+    if not prewhitening.type.value:
         logger.debug("No prewhitening was defined -- skipping recoloring")
         return stft_obj
 
@@ -172,7 +182,7 @@ def apply_recoloring(
     frequencies = np.asarray(stft_obj.frequency.data)
     for channel_id in stft_obj.data_vars:
         response = _whitening_response(
-            prewhitening_type,
+            prewhitening,
             frequencies,
             sample_rate,
             results.get(channel_id),
