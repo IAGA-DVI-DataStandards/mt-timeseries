@@ -43,13 +43,18 @@ def _fit_ar_residuals(
         msg = f"Channel {channel_id} produced an unstable AR filter"
         raise ValueError(msg)
 
+    ar_coefficients = [float(value) for value in fitted_model.arparams]
     result = FCChannel(
         component=channel_id,
-        prewhitening_type="ARMA",
-        prewhitening_fit_domain="full run",
-        prewhitening_response_convention="A(z) = 1 - sum(phi_k z^-k)",
-        prewhitening_ar_coefficients=[float(value) for value in fitted_model.arparams],
-        prewhitening_ma_coefficients=[],
+        prewhitening=Prewhitening(
+            type=PrewhiteningTypeEnum.arma,
+            ar_order=len(ar_coefficients),
+            ma_order=0,
+            fit_domain="full run",
+            response_convention="A(z) = 1 - sum(phi_k z^-k)",
+            ar_coefficients=ar_coefficients,
+            ma_coefficients=[],
+        ),
     )
     return np.asarray(fitted_model.resid), result
 
@@ -57,8 +62,8 @@ def _fit_ar_residuals(
 def _coefficient_attrs(result: FCChannel) -> dict[str, list[float]]:
     """Return the transient coefficient keys used by the xarray transport."""
     return {
-        "ar_coefficients": result.prewhitening_ar_coefficients,
-        "ma_coefficients": result.prewhitening_ma_coefficients,
+        "ar_coefficients": result.prewhitening.ar_coefficients,
+        "ma_coefficients": result.prewhitening.ma_coefficients,
     }
 
 
@@ -117,13 +122,13 @@ def _whitening_response(
             raise ValueError(msg)
         ar_polynomial = np.ones_like(z_inverse, dtype=complex)
         for order, coefficient in enumerate(
-            result.prewhitening_ar_coefficients, start=1
+            result.prewhitening.ar_coefficients, start=1
         ):
             ar_polynomial -= coefficient * z_inverse**order
 
         ma_polynomial = np.ones_like(z_inverse, dtype=complex)
         for order, coefficient in enumerate(
-            result.prewhitening_ma_coefficients, start=1
+            result.prewhitening.ma_coefficients, start=1
         ):
             ma_polynomial += coefficient * z_inverse**order
         return ar_polynomial / ma_polynomial
