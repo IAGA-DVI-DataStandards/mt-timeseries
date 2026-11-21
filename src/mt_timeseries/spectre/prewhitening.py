@@ -7,37 +7,8 @@ from typing import Mapping
 import numpy as np
 import xarray as xr
 from loguru import logger
-from mt_metadata.base import MetadataBase
 from mt_metadata.processing.fourier_coefficients import FCChannel
-from mt_metadata.processing.short_time_fourier_transform import PrewhiteningTypeEnum
-from pydantic import Field, model_validator
-
-
-class Prewhitening(MetadataBase):
-    """Temporary prewhitening metadata model pending migration to mt-metadata."""
-
-    type: PrewhiteningTypeEnum = PrewhiteningTypeEnum.first_difference
-    ar_order: int = Field(default=0, ge=0)
-    ma_order: int = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def validate_arma_orders(self) -> "Prewhitening":
-        if self.type == PrewhiteningTypeEnum.arma and self.ar_order < 1:
-            msg = "ARMA prewhitening requires ar_order to be at least 1"
-            raise ValueError(msg)
-        if self.type == PrewhiteningTypeEnum.arma and self.ma_order != 0:
-            msg = "ARMA prewhitening currently supports only ma_order == 0"
-            raise NotImplementedError(msg)
-        return self
-
-
-def _prewhitening_metadata(stft_config) -> Prewhitening:
-    """Build the temporary model from the flat STFT metadata fields."""
-    return Prewhitening(
-        type=stft_config.prewhitening_type,
-        ar_order=stft_config.prewhitening_ar_order,
-        ma_order=stft_config.prewhitening_ma_order,
-    )
+from mt_metadata.processing.prewhitening import Prewhitening, PrewhiteningTypeEnum
 
 
 def _fit_ar_residuals(
@@ -102,7 +73,7 @@ def apply_prewhitening(
     metadata must be passed to :func:`apply_recoloring`; filters are never fit
     from Fourier data.
     """
-    prewhitening = _prewhitening_metadata(stft_config)
+    prewhitening = stft_config.prewhitening
     if not prewhitening.type.value:
         logger.info("No prewhitening specified - skipping this step")
         return run_xrds_input, {}
@@ -173,7 +144,7 @@ def apply_recoloring(
     Frequencies where the whitening response is zero are set to zero, including
     DC for first differences, instead of emitting infinities.
     """
-    prewhitening = _prewhitening_metadata(stft_config)
+    prewhitening = stft_config.prewhitening
     if not prewhitening.type.value:
         logger.debug("No prewhitening was defined -- skipping recoloring")
         return stft_obj

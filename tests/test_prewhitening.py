@@ -3,38 +3,27 @@ import pytest
 import xarray as xr
 from mt_metadata.processing import ShortTimeFourierTransform
 from mt_metadata.processing.fourier_coefficients import FCChannel
-from mt_metadata.processing.short_time_fourier_transform import PrewhiteningTypeEnum
+from mt_metadata.processing.prewhitening import Prewhitening, PrewhiteningTypeEnum
 from pydantic import ValidationError
 
-from mt_timeseries.spectre.prewhitening import (
-    Prewhitening,
-    apply_prewhitening,
-    apply_recoloring,
-)
+from mt_timeseries.spectre.prewhitening import apply_prewhitening, apply_recoloring
 
 
 @pytest.fixture
 def first_difference_config():
     return ShortTimeFourierTransform(
-        prewhitening_type=PrewhiteningTypeEnum.first_difference,
+        prewhitening=Prewhitening(type=PrewhiteningTypeEnum.first_difference),
     )
 
 
 @pytest.fixture
 def ar_config():
     return ShortTimeFourierTransform(
-        prewhitening_type=PrewhiteningTypeEnum.arma,
-        prewhitening_ar_order=1,
-        prewhitening_ma_order=0,
-    )
-
-
-@pytest.fixture
-def ma_config():
-    return ShortTimeFourierTransform(
-        prewhitening_type=PrewhiteningTypeEnum.arma,
-        prewhitening_ar_order=1,
-        prewhitening_ma_order=1,
+        prewhitening=Prewhitening(
+            type=PrewhiteningTypeEnum.arma,
+            ar_order=1,
+            ma_order=0,
+        ),
     )
 
 
@@ -157,12 +146,12 @@ def test_ar_prewhitening_rejects_non_finite_samples(ar_config):
         )
 
 
-def test_ar_prewhitening_rejects_nonzero_ma_order(ma_config):
+def test_ar_prewhitening_rejects_nonzero_ma_order():
     with pytest.raises(NotImplementedError, match="ma_order"):
         Prewhitening(
             type=PrewhiteningTypeEnum.arma,
-            ar_order=ma_config.prewhitening_ar_order,
-            ma_order=ma_config.prewhitening_ma_order,
+            ar_order=1,
+            ma_order=1,
         )
 
 
